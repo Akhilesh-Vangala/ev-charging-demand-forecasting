@@ -1,0 +1,21 @@
+{
+  "total_registered_evs": 210774,
+  "total_charging_stations": 5501,
+  "counties_covered": 62,
+  "zips_covered": 1907,
+  "naive_metrics": {
+    "mae": 161.9758064516129,
+    "rmse": 480.9134537523358,
+    "mape": 25.93174382478729
+  },
+  "lgbm_metrics": {
+    "mae": 729.7134865063215,
+    "rmse": 1525.8947615175832,
+    "mape": 151.7731809157875
+  },
+  "holdout_years": [
+    2024,
+    2025
+  ],
+  "nyc_zips_with_zero_dcfc_and_50plus_evs": 129
+}
