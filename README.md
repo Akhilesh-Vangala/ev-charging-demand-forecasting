@@ -36,8 +36,9 @@ the pipeline doesn't hammer the source APIs.
 2. **Clean** - normalize zip codes to 5 digits, standardize county names, drop
    out-of-state and clearly invalid rows, coerce port counts to numeric.
 3. **Forecast** - build a county-by-model-year registration time series, then compare
-   a naive last-year baseline against a LightGBM regression (lag features + year index)
-   on a held-out 2024-2025 window.
+   five models on a held-out 2024-2025 window: a naive last-year baseline, an OLS linear
+   trend, Holt's linear exponential smoothing, Random Forest, and LightGBM (lag features
+   + year index).
 4. **Rank** - compute a zip-level "registered EVs per public charging port" ratio across
    NYC's five counties to surface zip codes with a real gap between demand and supply.
 
@@ -65,15 +66,20 @@ small synthetic fixtures so they don't depend on network access.
 ## Key finding, and why it matters more than the model
 
 Statewide EV registrations grew every year from 2018 through 2023, then **declined for
-two consecutive years** (2024 and 2025). A model trained on the pre-2024 acceleration -
-including the LightGBM model in this repo - overshoots badly once that trend reverses,
-while a naive "assume no growth" baseline ends up more accurate almost by accident. Full
-numbers and interpretation are in [`reports/REPORT.md`](reports/REPORT.md).
+two consecutive years** (2024 and 2025). Every trend-aware model tested here - OLS,
+Holt, Random Forest, LightGBM - loses to a naive "assume no growth" baseline on the
+2024-2025 holdout, and **the size of the loss tracks how hard each model extrapolates
+trend**: Holt's exponential smoothing, which explicitly projects an unbounded trend
+line forward, has the worst holdout RMSE (2,246) and the largest positive bias (+757);
+the naive baseline, which assumes no trend at all, has the best RMSE (481). Full numbers,
+the bias-variance breakdown, and the worst-predicted counties are in
+[`reports/REPORT.md`](reports/REPORT.md).
 
-That result is the actual point of this project: a forecasting model is only as good as
-its ability to notice when the regime it was trained on has ended, and it's worth
-reporting that limitation plainly rather than picking a holdout window that flatters the
-model.
+That ordering is the actual point of this project: a forecasting model is only as good
+as its ability to notice when the regime it was trained on has ended, and the model
+that "loses" here (naive) only wins because it never assumed growth would continue in
+the first place. It's worth reporting that plainly rather than picking a holdout window
+that flatters the more sophisticated model.
 
 ## Limitations
 

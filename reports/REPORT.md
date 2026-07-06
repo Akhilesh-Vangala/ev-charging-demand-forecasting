@@ -1,9 +1,9 @@
 # Findings
 
 Data pulled from data.ny.gov and the Census Gazetteer on 2026-07-06. Numbers below come
-directly from `data/processed/summary.json` after running `run_pipeline.py`; re-running
-the pipeline on a later date will pull fresher registration counts and may shift these
-slightly.
+directly from `data/processed/summary.json` and `data/processed/lgbm_county_bias_variance.csv`
+after running `run_pipeline.py`; re-running the pipeline on a later date will pull
+fresher registration counts and may shift these slightly.
 
 ## 1. Statewide EV adoption peaked in 2023 and has fallen for two years running
 
@@ -22,36 +22,68 @@ New registrations by model year, statewide:
 Growth from 2021 to 2023 was roughly 4x. Then it reversed: 2024 came in 8% below 2023,
 and 2025 came in another 14% below 2024. This isn't isolated to one or two counties -
 it shows up across the largest EV markets in the state (Nassau, Suffolk, Queens,
-Westchester all show the same flattening in the chart above).
+Westchester all show the same flattening in the chart above, shaded as the "slowdown
+period").
 
-## 2. That reversal is exactly where a trend-following model breaks
+## 2. Five models, one holdout, and a clean ordering by how much each one trusts the trend
 
-![Forecast error comparison](figures/forecast_error_comparison.png)
+![Model comparison](figures/model_comparison.png)
 
-Two approaches were backtested on the 2024-2025 holdout, trained only on 2011-2023:
+All five models were trained only on 2011-2023 and evaluated on the 2024-2025 holdout:
 
-| Model | MAE | RMSE | MAPE |
-|---|---|---|---|
-| Naive (predict last year's count) | 162 | 481 | 25.9% |
-| LightGBM (lag features + year index) | 730 | 1,526 | 151.8% |
+| Model | RMSE | MAE | MAPE | Bias | Variance component |
+|---|---|---|---|---|---|
+| Naive (last year) | 481 | 162 | 25.9% | +84 | 474 |
+| OLS trend | 686 | 264 | 35.4% | -236 | 644 |
+| Random Forest | 1,175 | 601 | 115.0% | +514 | 1,056 |
+| LightGBM | 1,526 | 730 | 151.8% | +669 | 1,371 |
+| Holt linear | 2,246 | 759 | 91.2% | +757 | 2,115 |
 
-The naive baseline wins by a wide margin, which looks backwards until you look at why.
-Orange County is a clean example: registrations went 445 (2022) -> 925 (2023) -> 988
-(2024), a strong upward run. LightGBM, trained on that run, predicted 5,919 for 2025.
-The actual number was 791. The model wasn't picking up noise - it was doing exactly
-what a gradient-boosted tree does with an accelerating trend, which is extrapolate it
-forward. When 2025 broke the pattern instead of continuing it, that extrapolation
-became the error. The naive model never assumed growth in the first place, so it had
-nothing to unwind.
+![Bias vs variance](figures/bias_variance.png)
 
-The practical takeaway: a forecasting model's backtest accuracy depends entirely on
-whether the holdout period continues the training trend or breaks it. Reporting a
-single accuracy number without stating which kind of period it was tested on is
-misleading. Any utilization model built on a growth market (which EV charging is)
-needs either a mechanism to detect regime changes or a wide enough confidence interval
-to survive being wrong about one.
+This ordering is not random. It lines up almost exactly with how strongly each model's
+inductive bias assumes the trend continues:
 
-## 3. Where NYC's charging supply is furthest behind registered demand
+- **Naive** assumes zero trend - it predicts next year equals last year. When the trend
+  broke, this model had nothing to unwind, so it wins by default.
+- **OLS trend** fits one straight line per county across all of 2011-2023. It's a mild
+  trend assumption, and it lands in between: worse than naive, better than everything
+  that leans on more recent, steeper history.
+- **Random Forest** and **LightGBM** split on lag features, so their extrapolation is
+  bounded by leaf values seen in training - they overshoot, but not without limit.
+- **Holt's linear exponential smoothing** explicitly extrapolates a locally-weighted
+  trend line with no bound, and it does so using mostly the last few (fastest-growing)
+  years. It has the worst RMSE (2,246) and the largest bias (+757): it was the most
+  confident that 2024's growth would continue into 2025, and it was the most wrong.
+
+Every model above naive is *positively* biased (over-predicts) except OLS, which
+slightly under-predicts (-236) - a signal that a single county-wide line, fit across
+the entire 2011-2023 window, is already pulled down by the early flat years enough to
+partially offset the late acceleration it's also trying to fit.
+
+## 3. Where the LightGBM model failed hardest
+
+![Worst-predicted counties](figures/worst_counties.png)
+
+New York (Manhattan) county has the single worst LightGBM holdout error (RMSE 4,716)
+and it is almost entirely bias, not variance (bias 4,716 vs. variance component only
+40) - the model was consistently and confidently wrong in one direction on a
+county with only two holdout points, which is as much a small-sample warning as a
+modeling one. Orange and Rockland counties, by contrast, have their error split more
+evenly between bias and variance, suggesting a noisier underlying trend rather than a
+single systematic miss.
+
+## 4. What actually drives the LightGBM forecast
+
+![Feature importance](figures/feature_importance.png)
+
+By total gain, `lag_1` (last year's count) and `lag_2` (two years back) dominate,
+together accounting for the large majority of the model's split gain. `year_index` and
+`county_code` contribute much less. In other words, the model is mostly a
+sophisticated way of looking at recent history - which is exactly why it, like Holt,
+gets hurt when recent history stops being a reliable guide to what's next.
+
+## 5. Where NYC's charging supply is furthest behind registered demand
 
 ![NYC demand gap](figures/nyc_demand_gap.png)
 
@@ -77,6 +109,9 @@ at all."
 - These are registration-based demand proxies, not measured utilization. See the
   README's Limitations section before treating any of these numbers as a substitute for
   real session-level data.
+- Per-county holdout metrics are computed on just 2 data points (model years 2024 and
+  2025) per county, so the worst-county ranking in Section 3 is illustrative of the
+  failure mode, not a statistically robust ranking on its own.
 - The zip-level ranking does not yet account for zip land area, commute patterns, or
   proximity to highways - all of which affect where a DCFC site actually gets used
   versus just being near registered vehicles. That's the natural next iteration, and is
