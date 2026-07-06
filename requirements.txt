@@ -3,5 +3,6 @@ numpy
 scikit-learn
 lightgbm
 matplotlib
+statsmodels
 requests
 pytest

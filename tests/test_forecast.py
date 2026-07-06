@@ -2,7 +2,15 @@ import numpy as np
 import pandas as pd
 
 from src.features import add_lag_features, county_year_counts
-from src.forecast import evaluate, lgbm_forecast, naive_forecast
+from src.forecast import (
+    bias_variance_by_group,
+    evaluate,
+    holt_forecast,
+    lgbm_forecast,
+    naive_forecast,
+    ols_trend_forecast,
+    rf_forecast,
+)
 
 
 def test_evaluate_perfect_prediction_has_zero_error():
@@ -10,11 +18,33 @@ def test_evaluate_perfect_prediction_has_zero_error():
     assert metrics["mae"] == 0
     assert metrics["rmse"] == 0
     assert metrics["mape"] == 0
+    assert metrics["bias"] == 0
+    assert metrics["variance_component"] == 0
 
 
 def test_evaluate_mape_ignores_zero_actuals():
     metrics = evaluate([0, 10], [5, 12])
     assert abs(metrics["mape"] - 20.0) < 1e-6
+
+
+def test_evaluate_bias_variance_decomposition_recovers_rmse():
+    metrics = evaluate([100, 200, 300], [150, 250, 250])
+    recomposed = (metrics["bias"] ** 2 + metrics["variance_component"] ** 2) ** 0.5
+    assert abs(recomposed - metrics["rmse"]) < 1e-6
+
+
+def test_bias_variance_by_group_flags_worst_county():
+    preds = pd.DataFrame(
+        {
+            "county": ["KINGS", "KINGS", "QUEENS", "QUEENS"],
+            "model_year": [2024, 2025, 2024, 2025],
+            "new_registrations": [100, 100, 100, 100],
+            "prediction": [100, 100, 500, 500],
+        }
+    )
+    out = bias_variance_by_group(preds)
+    assert out.iloc[0]["county"] == "QUEENS"
+    assert out.iloc[0]["rmse"] > out.iloc[1]["rmse"]
 
 
 def test_naive_forecast_uses_prior_year_as_prediction():
@@ -43,3 +73,39 @@ def test_lgbm_forecast_runs_end_to_end_on_synthetic_series():
     assert len(preds) == len(counties) * 2
     assert (preds["prediction"] >= 0).all()
     assert model is not None
+
+
+def _synthetic_lagged_series():
+    rng = np.random.default_rng(0)
+    counties = ["KINGS", "QUEENS", "BRONX"]
+    rows = []
+    for county in counties:
+        base = rng.integers(50, 200)
+        for i, year in enumerate(range(2015, 2027)):
+            rows.append({"county": county, "model_year": year, "new_registrations": base + i * 15})
+
+    county_year = pd.DataFrame(rows)
+    county_year["cumulative_registrations"] = county_year.groupby("county")["new_registrations"].cumsum()
+    return add_lag_features(county_year, n_lags=2)
+
+
+def test_rf_forecast_runs_end_to_end():
+    lagged = _synthetic_lagged_series()
+    preds, model = rf_forecast(lagged, holdout_years=[2025, 2026])
+    assert len(preds) == 6
+    assert (preds["prediction"] >= 0).all()
+    assert model is not None
+
+
+def test_ols_trend_forecast_extrapolates_linear_series():
+    lagged = _synthetic_lagged_series()
+    preds = ols_trend_forecast(lagged, holdout_years=[2025, 2026])
+    assert len(preds) == 6
+    assert (preds["prediction"] >= 0).all()
+
+
+def test_holt_forecast_runs_end_to_end():
+    lagged = _synthetic_lagged_series()
+    preds = holt_forecast(lagged, holdout_years=[2025, 2026])
+    assert len(preds) == 6
+    assert (preds["prediction"] >= 0).all()
